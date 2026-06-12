@@ -1,0 +1,66 @@
+name: Release
+
+# 推一個版本標籤就會自動打包三個平台安裝檔並建立 GitHub Release（草稿）：
+#   git tag v0.1.0 && git push origin v0.1.0
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest # Apple Silicon (M 系列)
+            args: --target aarch64-apple-darwin
+          - platform: macos-latest # Intel Mac
+            args: --target x86_64-apple-darwin
+          - platform: windows-latest
+            args: ""
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # macOS runner 需要兩個 target 才能分別編 ARM 和 Intel 版
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm install
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "SimpleCut ${{ github.ref_name }}"
+          releaseBody: |
+            ## 下載
+
+            | 平台 | 檔案 |
+            |---|---|
+            | macOS（M 系列晶片） | `*_aarch64.dmg` |
+            | macOS（Intel） | `*_x64.dmg` |
+            | Windows | `*-setup.exe` 或 `*.msi` |
+
+            ## 使用前提：先安裝 ffmpeg
+
+            - macOS：`brew install ffmpeg`
+            - Windows：`winget install ffmpeg`
+
+            macOS 第一次開啟請對 App 按右鍵→打開；Windows SmartScreen 跳出時點「其他資訊→仍要執行」。
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
