@@ -94,6 +94,35 @@ export default function Inspector() {
               onChange={(e) => updateClip(clip.id, { volume: parseFloat(e.target.value) })}
             />
           </label>
+          <div className="panel-title">畫面裁剪</div>
+          {(["l", "r", "t", "b"] as const).map((side) => {
+            const labels = { l: "左", r: "右", t: "上", b: "下" };
+            const crop = clip.crop ?? { l: 0, t: 0, r: 0, b: 0 };
+            return (
+              <label className="field" key={side}>
+                <span>
+                  裁掉{labels[side]}側 {Math.round(crop[side] * 100)}%
+                </span>
+                <input
+                  type="range"
+                  min={0}
+                  max={0.45}
+                  step={0.01}
+                  value={crop[side]}
+                  onChange={(e) =>
+                    updateClip(clip.id, {
+                      crop: { ...crop, [side]: parseFloat(e.target.value) },
+                    })
+                  }
+                />
+              </label>
+            );
+          })}
+          {clip.crop && (
+            <button onClick={() => updateClip(clip.id, { crop: undefined })}>
+              重設裁剪
+            </button>
+          )}
           <button className="danger block" onClick={deleteSelection}>
             刪除片段
           </button>

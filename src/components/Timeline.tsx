@@ -1,7 +1,8 @@
-import React, { useMemo, useRef } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { computeSegments, formatTime, totalDuration, useStore } from "../store";
+import { parseSubtitles } from "../subtitles";
 
 function dragHorizontal(
   e: React.MouseEvent,
@@ -28,9 +29,9 @@ export default function Timeline() {
   const playing = useStore((s) => s.playing);
   const zoom = useStore((s) => s.zoom);
   const select = useStore((s) => s.select);
-  const moveClip = useStore((s) => s.moveClip);
   const splitAtPlayhead = useStore((s) => s.splitAtPlayhead);
   const addText = useStore((s) => s.addText);
+  const importTexts = useStore((s) => s.importTexts);
   const deleteSelection = useStore((s) => s.deleteSelection);
   const setPlaying = useStore((s) => s.setPlaying);
   const setZoom = useStore((s) => s.setZoom);
@@ -40,7 +41,8 @@ export default function Timeline() {
   const total = totalDuration(clips);
   const contentSec = Math.max(total, music?.duration ?? 0, 30) + 5;
   const innerRef = useRef<HTMLDivElement>(null);
-  const draggedClip = useRef<string | null>(null);
+  // 拖曳中的片段跟著游標畫（startSec），其餘片段由 store 重排後磁性吸附
+  const [dragGhost, setDragGhost] = useState<{ id: string; startSec: number } | null>(null);
 
   function seekTo(clientX: number) {
     const el = innerRef.current;
@@ -60,6 +62,54 @@ export default function Timeline() {
     const up = () => {
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
+  function beginClipDrag(e: React.MouseEvent, clipId: string) {
+    e.preventDefault();
+    e.stopPropagation();
+    const st = useStore.getState();
+    st.select({ kind: "clip", id: clipId });
+    const inner = innerRef.current;
+    if (!inner) return;
+    const segsNow = computeSegments(st.clips);
+    const seg = segsNow.find((s) => s.clip.id === clipId);
+    if (!seg) return;
+    const dur = seg.dur;
+    const rect = inner.getBoundingClientRect();
+    const grabOffset = (e.clientX - rect.left) / st.zoom - seg.start;
+    const downX = e.clientX;
+    let started = false;
+
+    const move = (ev: MouseEvent) => {
+      if (!started && Math.abs(ev.clientX - downX) < 4) return; // click ≠ drag
+      started = true;
+      const s = useStore.getState();
+      const pointerSec = (ev.clientX - inner.getBoundingClientRect().left) / s.zoom;
+      const startSec = Math.max(0, pointerSec - grabOffset);
+      setDragGhost({ id: clipId, startSec });
+      // 片段中心落在哪兩個鄰居之間，就插到哪個位置（磁性時間軸）
+      const center = startSec + dur / 2;
+      const others = s.clips.filter((c) => c.id !== clipId);
+      let cum = 0;
+      let target = others.length;
+      for (let i = 0; i < others.length; i++) {
+        const od = others[i].out - others[i].in;
+        if (center < cum + od / 2) {
+          target = i;
+          break;
+        }
+        cum += od;
+      }
+      const current = s.clips.findIndex((c) => c.id === clipId);
+      if (target !== current) s.moveClip(clipId, target);
+    };
+    const up = () => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      setDragGhost(null);
     };
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
@@ -109,6 +159,25 @@ export default function Timeline() {
     });
   }
 
+  async function importSubtitles() {
+    const picked = await open({
+      multiple: false,
+      filters: [{ name: "字幕檔", extensions: ["srt", "vtt"] }],
+    });
+    if (!picked || Array.isArray(picked)) return;
+    try {
+      const content = await invoke<string>("read_project_file", { path: picked });
+      const cues = parseSubtitles(content);
+      if (cues.length === 0) {
+        alert("沒有解析到任何字幕，請確認是 UTF-8 編碼的 SRT 或 VTT 檔。");
+        return;
+      }
+      importTexts(cues);
+    } catch (err) {
+      alert(`無法讀取字幕檔：${err}\n（檔案需為 UTF-8 編碼）`);
+    }
+  }
+
   async function addMusic() {
     const picked = await open({
       multiple: false,
@@ -151,6 +220,9 @@ export default function Timeline() {
         <button onClick={addText} title="在播放點加入字幕">
           T 加字幕
         </button>
+        <button onClick={importSubtitles} title="匯入 SRT / VTT 字幕檔">
+          📄 匯入字幕
+        </button>
         <button onClick={deleteSelection} title="刪除選取項目（Delete）">
           🗑 刪除
         </button>
@@ -179,31 +251,18 @@ export default function Timeline() {
           </div>
 
           <div className="tl-track video-track" onMouseDown={onScrub}>
-            {segs.map((seg, i) => {
+            {segs.map((seg) => {
               const c = seg.clip;
               const asset = assets.find((a) => a.id === c.assetId);
               const selected = selection?.kind === "clip" && selection.id === c.id;
+              const dragging = dragGhost?.id === c.id;
+              const left = (dragging ? dragGhost.startSec : seg.start) * zoom;
               return (
                 <div
                   key={c.id}
-                  className={`clip ${selected ? "selected" : ""}`}
-                  style={{ left: seg.start * zoom, width: Math.max(seg.dur * zoom, 10) }}
-                  draggable
-                  onDragStart={(e) => {
-                    draggedClip.current = c.id;
-                    e.dataTransfer.effectAllowed = "move";
-                  }}
-                  onDragOver={(e) => e.preventDefault()}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    const id = draggedClip.current;
-                    if (id && id !== c.id) moveClip(id, i);
-                    draggedClip.current = null;
-                  }}
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                    select({ kind: "clip", id: c.id });
-                  }}
+                  className={`clip ${selected ? "selected" : ""} ${dragging ? "dragging" : ""}`}
+                  style={{ left, width: Math.max(seg.dur * zoom, 10) }}
+                  onMouseDown={(e) => beginClipDrag(e, c.id)}
                 >
                   <div
                     className="trim-handle left"

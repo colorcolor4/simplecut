@@ -64,6 +64,7 @@ interface State {
   moveClip: (id: string, toIndex: number) => void;
   splitAtPlayhead: () => void;
   addText: () => void;
+  importTexts: (cues: { start: number; end: number; text: string }[]) => void;
   updateText: (id: string, patch: Partial<TextOverlay>) => void;
   removeText: (id: string) => void;
   setMusic: (m: Music | null) => void;
@@ -156,6 +157,23 @@ export const useStore = create<State>((set, get) => ({
     };
     set((s) => ({ texts: [...s.texts, t], selection: { kind: "text", id: t.id } }));
   },
+
+  importTexts: (cues) =>
+    set((s) => ({
+      texts: [
+        ...s.texts,
+        ...cues.map((c) => ({
+          id: uid(),
+          text: c.text,
+          start: c.start,
+          end: c.end,
+          x: 0.5,
+          y: 0.88,
+          fontSize: 56,
+          color: "#ffffff",
+        })),
+      ],
+    })),
 
   updateText: (id, patch) =>
     set((s) => ({

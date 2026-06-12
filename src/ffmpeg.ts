@@ -15,6 +15,15 @@ export function defaultFontFile(): string {
 
 const f = (n: number) => (Math.round(n * 1000) / 1000).toString();
 
+export type VideoCodec = "h264" | "hevc";
+export type Quality = "high" | "medium" | "low";
+
+// CRF scales differ between encoders; these pairs land on similar visual quality
+const CRF: Record<VideoCodec, Record<Quality, number>> = {
+  h264: { high: 18, medium: 23, low: 28 },
+  hevc: { high: 22, medium: 26, low: 30 },
+};
+
 export interface ExportOptions {
   clips: Clip[];
   assets: MediaAsset[];
@@ -25,6 +34,8 @@ export interface ExportOptions {
   width: number;
   height: number;
   fps: number;
+  codec: VideoCodec;
+  quality: Quality;
   outPath: string;
 }
 
@@ -41,8 +52,13 @@ export function buildExportArgs(o: ExportOptions): string[] {
 
   const parts: string[] = [];
   clips.forEach((c, i) => {
+    const cr = c.crop;
+    const hasCrop = cr && cr.l + cr.t + cr.r + cr.b > 0.001;
+    const cropF = hasCrop
+      ? `crop=iw*${f(1 - cr.l - cr.r)}:ih*${f(1 - cr.t - cr.b)}:iw*${f(cr.l)}:ih*${f(cr.t)},`
+      : "";
     parts.push(
-      `[${i}:v]scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
+      `[${i}:v]${cropF}scale=${W}:${H}:force_original_aspect_ratio=decrease,` +
         `pad=${W}:${H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${fps}[v${i}]`
     );
     if (assetOf(c.assetId).hasAudio) {
@@ -96,11 +112,11 @@ export function buildExportArgs(o: ExportOptions): string[] {
     "-map",
     `[${aout}]`,
     "-c:v",
-    "libx264",
+    o.codec === "hevc" ? "libx265" : "libx264",
     "-preset",
     "veryfast",
     "-crf",
-    "18",
+    String(CRF[o.codec][o.quality]),
     "-pix_fmt",
     "yuv420p",
     "-c:a",
@@ -108,11 +124,10 @@ export function buildExportArgs(o: ExportOptions): string[] {
     "-b:a",
     "192k",
     "-movflags",
-    "+faststart",
-    "-progress",
-    "pipe:1",
-    "-nostats",
-    o.outPath
+    "+faststart"
   );
+  // without hvc1 tagging QuickTime/Finder refuse to play HEVC mp4
+  if (o.codec === "hevc") args.push("-tag:v", "hvc1");
+  args.push("-progress", "pipe:1", "-nostats", o.outPath);
   return args;
 }

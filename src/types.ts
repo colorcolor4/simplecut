@@ -10,12 +10,20 @@ export interface MediaAsset {
   hasVideo: boolean;
 }
 
+export interface CropBox {
+  l: number; // fraction cut from the left edge (0..1)
+  t: number;
+  r: number;
+  b: number;
+}
+
 export interface Clip {
   id: string;
   assetId: string;
   in: number; // trim start within the source asset (seconds)
   out: number; // trim end within the source asset (seconds)
   volume: number; // 0..1
+  crop?: CropBox;
 }
 
 export interface TextOverlay {

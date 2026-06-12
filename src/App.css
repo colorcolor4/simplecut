@@ -423,6 +423,13 @@ input[type="color"] {
   background: linear-gradient(180deg, #2ea06a, #1f7a4e);
 }
 
+.clip.dragging {
+  opacity: 0.85;
+  z-index: 6;
+  cursor: grabbing;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+}
+
 .clip.selected,
 .text-block.selected,
 .music-block.selected {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { BASE_W } from "../ffmpeg";
 import {
   computeSegments,
@@ -10,6 +10,7 @@ import {
 
 export default function Preview() {
   const clips = useStore((s) => s.clips);
+  const assets = useStore((s) => s.assets);
   const texts = useStore((s) => s.texts);
   const music = useStore((s) => s.music);
   const playhead = useStore((s) => s.playhead);
@@ -157,12 +158,43 @@ export default function Preview() {
   const fontScale = stage.w / BASE_W;
   const visibleTexts = texts.filter((t) => playhead >= t.start && playhead < t.end);
 
+  // 跟匯出同一套幾何：裁剪後的區域 contain-fit 進畫布置中，
+  // 用 clip-path 遮掉裁掉的部分、位移讓裁剪區對齊畫布中心
+  let videoStyle: CSSProperties = {};
+  {
+    let idx = segmentAt(segs, playhead);
+    if (idx < 0) idx = playhead >= totalDuration(clips) - 1e-6 ? segs.length - 1 : 0;
+    const seg = segs[idx];
+    const asset = seg && assets.find((a) => a.id === seg.clip.assetId);
+    if (seg && asset && asset.width > 0 && asset.height > 0) {
+      const cr = seg.clip.crop;
+      const l = cr?.l ?? 0;
+      const t = cr?.t ?? 0;
+      const r = cr?.r ?? 0;
+      const b = cr?.b ?? 0;
+      const cw = asset.width * (1 - l - r);
+      const ch = asset.height * (1 - t - b);
+      if (cw > 0 && ch > 0) {
+        const s = Math.min(stage.w / cw, stage.h / ch);
+        videoStyle = {
+          position: "absolute",
+          width: asset.width * s,
+          height: asset.height * s,
+          left: (stage.w - cw * s) / 2 - asset.width * l * s,
+          top: (stage.h - ch * s) / 2 - asset.height * t * s,
+          clipPath: `inset(${t * 100}% ${r * 100}% ${b * 100}% ${l * 100}%)`,
+        };
+      }
+    }
+  }
+
   return (
     <div className="preview" ref={wrapRef}>
       <div className="preview-stage" style={{ width: stage.w, height: stage.h }}>
         <video
           ref={videoRef}
           playsInline
+          style={videoStyle}
           onLoadedMetadata={() => {
             const v = videoRef.current;
             if (v && pendingSeekRef.current !== null) {

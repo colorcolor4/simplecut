@@ -2,7 +2,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
-import { buildExportArgs } from "../ffmpeg";
+import { buildExportArgs, type Quality, type VideoCodec } from "../ffmpeg";
 import { formatTime, totalDuration, useStore } from "../store";
 
 type Phase = "idle" | "running" | "done" | "error";
@@ -14,6 +14,8 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
   const music = useStore((s) => s.music);
 
   const [res, setRes] = useState<"1080p" | "720p">("1080p");
+  const [codec, setCodec] = useState<VideoCodec>("h264");
+  const [quality, setQuality] = useState<Quality>("high");
   const [phase, setPhase] = useState<Phase>("idle");
   const [pct, setPct] = useState(0);
   const [msg, setMsg] = useState("");
@@ -50,6 +52,8 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
         textFiles,
         ...dims,
         fps: 30,
+        codec,
+        quality,
         outPath: out,
       });
       const unlisten = await listen<number>("export-progress", (e) => {
@@ -88,9 +92,22 @@ export default function ExportDialog({ onClose }: { onClose: () => void }) {
                 <option value="720p">720p（1280×720）</option>
               </select>
             </label>
-            <div className="insp-sub">
-              片長 {formatTime(total)} · H.264 / AAC · 30fps
-            </div>
+            <label className="field">
+              <span>編碼</span>
+              <select value={codec} onChange={(e) => setCodec(e.target.value as VideoCodec)}>
+                <option value="h264">H.264（相容性最佳）</option>
+                <option value="hevc">H.265 / HEVC（檔案較小，轉檔較慢）</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>畫質</span>
+              <select value={quality} onChange={(e) => setQuality(e.target.value as Quality)}>
+                <option value="high">高（檔案較大）</option>
+                <option value="medium">中</option>
+                <option value="low">低（檔案最小）</option>
+              </select>
+            </label>
+            <div className="insp-sub">片長 {formatTime(total)} · AAC 192k · 30fps</div>
             {phase === "error" && <pre className="error-box">{msg}</pre>}
             <div className="modal-actions">
               <button onClick={onClose}>取消</button>
