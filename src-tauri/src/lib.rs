@@ -1,22 +1,65 @@
 use serde::Serialize;
 use std::io::{BufRead, BufReader, Read};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tauri::Emitter;
 
-/// GUI apps on macOS don't inherit the shell PATH, so probe common install
-/// locations before falling back to the bare command name.
+/// GUI apps don't reliably see the shell PATH (macOS apps never inherit it;
+/// on Windows a PATH updated by winget only reaches processes started after a
+/// re-login), so probe common install locations before falling back to the
+/// bare command name.
 fn find_tool(name: &str) -> String {
-    let candidates = [
-        format!("/opt/homebrew/bin/{name}"),
-        format!("/usr/local/bin/{name}"),
-        format!("/usr/bin/{name}"),
-    ];
+    let candidates: Vec<PathBuf> = if cfg!(windows) {
+        let exe = format!("{name}.exe");
+        let from_env = |var: &str, sub: &str| -> Option<PathBuf> {
+            std::env::var(var)
+                .ok()
+                .map(|d| PathBuf::from(d).join(sub).join(&exe))
+        };
+        [
+            from_env("LOCALAPPDATA", r"Microsoft\WinGet\Links"),
+            from_env("ProgramFiles", r"WinGet\Links"),
+            from_env("USERPROFILE", r"scoop\shims"),
+            from_env("ProgramData", r"chocolatey\bin"),
+            Some(PathBuf::from(format!(r"C:\ffmpeg\bin\{exe}"))),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    } else {
+        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+            .iter()
+            .map(|d| PathBuf::from(d).join(name))
+            .collect()
+    };
     for c in &candidates {
-        if std::path::Path::new(c).exists() {
-            return c.clone();
+        if c.exists() {
+            return c.to_string_lossy().into_owned();
         }
     }
     name.to_string()
+}
+
+/// Build a Command for an external tool; on Windows suppress the console
+/// window that would otherwise flash on every ffprobe/ffmpeg call.
+fn tool_command(name: &str) -> Command {
+    let cmd = Command::new(find_tool(name));
+    #[cfg(windows)]
+    let cmd = {
+        use std::os::windows::process::CommandExt;
+        let mut cmd = cmd;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        cmd
+    };
+    cmd
+}
+
+fn install_hint() -> &'static str {
+    if cfg!(windows) {
+        "請先安裝 ffmpeg：winget install ffmpeg，安裝完成後重新開啟本程式"
+    } else {
+        "請先安裝 ffmpeg：brew install ffmpeg"
+    }
 }
 
 #[derive(Serialize)]
@@ -30,7 +73,7 @@ pub struct MediaInfo {
 
 #[tauri::command]
 fn probe_media(path: String) -> Result<MediaInfo, String> {
-    let out = Command::new(find_tool("ffprobe"))
+    let out = tool_command("ffprobe")
         .args([
             "-v",
             "error",
@@ -41,7 +84,7 @@ fn probe_media(path: String) -> Result<MediaInfo, String> {
             &path,
         ])
         .output()
-        .map_err(|e| format!("無法執行 ffprobe：{e}（請先安裝 ffmpeg）"))?;
+        .map_err(|e| format!("無法執行 ffprobe：{e}（{}）", install_hint()))?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).to_string());
     }
@@ -107,12 +150,12 @@ fn paths_exist(paths: Vec<String>) -> Vec<bool> {
 }
 
 fn run_ffmpeg(app: tauri::AppHandle, args: Vec<String>) -> Result<(), String> {
-    let mut child = Command::new(find_tool("ffmpeg"))
+    let mut child = tool_command("ffmpeg")
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("無法執行 ffmpeg：{e}（請先安裝 ffmpeg）"))?;
+        .map_err(|e| format!("無法執行 ffmpeg：{e}（{}）", install_hint()))?;
 
     let mut stderr = child.stderr.take().unwrap();
     let stderr_thread = std::thread::spawn(move || {
