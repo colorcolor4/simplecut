@@ -4,34 +4,71 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tauri::Emitter;
 
+fn exe_name(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+/// settings.json 的位置（目前只存使用者手動指定的 ffmpeg 資料夾）
+fn config_file() -> Option<PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var("APPDATA").ok().map(PathBuf::from)
+    } else if cfg!(target_os = "macos") {
+        std::env::var("HOME")
+            .ok()
+            .map(|h| PathBuf::from(h).join("Library/Application Support"))
+    } else {
+        std::env::var("XDG_CONFIG_HOME")
+            .ok()
+            .map(PathBuf::from)
+            .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config")))
+    };
+    base.map(|b| b.join("simplecut").join("settings.json"))
+}
+
+fn custom_ffmpeg_dir() -> Option<PathBuf> {
+    let content = std::fs::read_to_string(config_file()?).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    v["ffmpeg_dir"].as_str().map(PathBuf::from)
+}
+
 /// GUI apps don't reliably see the shell PATH (macOS apps never inherit it;
 /// on Windows a PATH updated by winget only reaches processes started after a
-/// re-login), so probe common install locations before falling back to the
-/// bare command name.
+/// re-login), so probe the user-configured dir and common install locations
+/// before falling back to the bare command name.
 fn find_tool(name: &str) -> String {
-    let candidates: Vec<PathBuf> = if cfg!(windows) {
-        let exe = format!("{name}.exe");
+    let exe = exe_name(name);
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(dir) = custom_ffmpeg_dir() {
+        candidates.push(dir.join(&exe));
+    }
+    if cfg!(windows) {
         let from_env = |var: &str, sub: &str| -> Option<PathBuf> {
             std::env::var(var)
                 .ok()
                 .map(|d| PathBuf::from(d).join(sub).join(&exe))
         };
-        [
-            from_env("LOCALAPPDATA", r"Microsoft\WinGet\Links"),
-            from_env("ProgramFiles", r"WinGet\Links"),
-            from_env("USERPROFILE", r"scoop\shims"),
-            from_env("ProgramData", r"chocolatey\bin"),
-            Some(PathBuf::from(format!(r"C:\ffmpeg\bin\{exe}"))),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
+        candidates.extend(
+            [
+                from_env("LOCALAPPDATA", r"Microsoft\WinGet\Links"),
+                from_env("ProgramFiles", r"WinGet\Links"),
+                from_env("USERPROFILE", r"scoop\shims"),
+                from_env("ProgramData", r"chocolatey\bin"),
+                Some(PathBuf::from(format!(r"C:\ffmpeg\bin\{exe}"))),
+            ]
+            .into_iter()
+            .flatten(),
+        );
     } else {
-        ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
-            .iter()
-            .map(|d| PathBuf::from(d).join(name))
-            .collect()
-    };
+        candidates.extend(
+            ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin"]
+                .iter()
+                .map(|d| PathBuf::from(d).join(name)),
+        );
+    }
     for c in &candidates {
         if c.exists() {
             return c.to_string_lossy().into_owned();
@@ -40,10 +77,10 @@ fn find_tool(name: &str) -> String {
     name.to_string()
 }
 
-/// Build a Command for an external tool; on Windows suppress the console
-/// window that would otherwise flash on every ffprobe/ffmpeg call.
-fn tool_command(name: &str) -> Command {
-    let cmd = Command::new(find_tool(name));
+/// On Windows suppress the console window that would otherwise flash on
+/// every ffprobe/ffmpeg call.
+fn make_command(program: &str) -> Command {
+    let cmd = Command::new(program);
     #[cfg(windows)]
     let cmd = {
         use std::os::windows::process::CommandExt;
@@ -54,12 +91,71 @@ fn tool_command(name: &str) -> Command {
     cmd
 }
 
+fn tool_command(name: &str) -> Command {
+    make_command(&find_tool(name))
+}
+
 fn install_hint() -> &'static str {
     if cfg!(windows) {
-        "請先安裝 ffmpeg：winget install ffmpeg，安裝完成後重新開啟本程式"
+        "請先安裝 ffmpeg（winget install ffmpeg，裝完重開本程式），或在右上角「設定」手動指定 ffmpeg 位置"
     } else {
-        "請先安裝 ffmpeg：brew install ffmpeg"
+        "請先安裝 ffmpeg（brew install ffmpeg），或在右上角「設定」手動指定 ffmpeg 位置"
     }
+}
+
+#[derive(Serialize)]
+pub struct ToolStatus {
+    ffmpeg: Option<String>,
+    ffprobe: Option<String>,
+    custom_dir: Option<String>,
+}
+
+/// 路徑存在不代表能跑（可能是壞的符號連結或損毀檔），用 -version 實測
+fn resolve_verified(name: &str) -> Option<String> {
+    let p = find_tool(name);
+    let ok = make_command(&p)
+        .arg("-version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    ok.then_some(p)
+}
+
+#[tauri::command]
+fn tool_status() -> ToolStatus {
+    ToolStatus {
+        ffmpeg: resolve_verified("ffmpeg"),
+        ffprobe: resolve_verified("ffprobe"),
+        custom_dir: custom_ffmpeg_dir().map(|p| p.to_string_lossy().into_owned()),
+    }
+}
+
+#[tauri::command]
+fn set_ffmpeg_dir(dir: Option<String>) -> Result<ToolStatus, String> {
+    let file = config_file().ok_or("找不到設定檔位置")?;
+    match dir {
+        Some(d) => {
+            let exe = exe_name("ffmpeg");
+            let mut p = PathBuf::from(d);
+            // 使用者選到解壓根目錄時自動往下找 bin/
+            if !p.join(&exe).exists() && p.join("bin").join(&exe).exists() {
+                p = p.join("bin");
+            }
+            if !p.join(&exe).exists() {
+                return Err(format!("該資料夾內找不到 {exe}"));
+            }
+            std::fs::create_dir_all(file.parent().unwrap()).map_err(|e| e.to_string())?;
+            let json = serde_json::json!({ "ffmpeg_dir": p.to_string_lossy() });
+            std::fs::write(&file, serde_json::to_string_pretty(&json).unwrap())
+                .map_err(|e| e.to_string())?;
+        }
+        None => {
+            let _ = std::fs::remove_file(&file);
+        }
+    }
+    Ok(tool_status())
 }
 
 #[derive(Serialize)]
@@ -203,7 +299,9 @@ pub fn run() {
             export_video,
             save_project_file,
             read_project_file,
-            paths_exist
+            paths_exist,
+            tool_status,
+            set_ffmpeg_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

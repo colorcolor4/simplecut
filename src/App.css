@@ -517,6 +517,40 @@ input[type="color"] {
   transition: width 0.2s;
 }
 
+.tool-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 4px;
+}
+
+.tool-mark.ok {
+  color: #4ade80;
+}
+
+.tool-mark.bad {
+  color: var(--danger);
+}
+
+.tool-name {
+  font-weight: 600;
+  min-width: 56px;
+}
+
+.tool-path {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
 .error-box {
   background: rgba(229, 72, 77, 0.1);
   border: 1px solid var(--danger);

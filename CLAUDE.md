@@ -20,7 +20,8 @@ cargo check            # Rust 檢查（在 src-tauri/ 內跑，需先 source ~/.
 - `export_video` — 跑 ffmpeg，stdout 用 `-progress pipe:1` 解析進度發 `export-progress` 事件
 - `write_text_file` — 字幕內容寫暫存檔（drawtext 用 `textfile=` 避開跳脫地獄）
 - `save_project_file` / `read_project_file` / `paths_exist` — 專案存讀
-- `find_tool()` — GUI app 拿不到可靠的 shell PATH（mac 完全不繼承；Windows 上 winget 改的 PATH 要重新登入才生效），所以直接檢查常見安裝位置：mac=/opt/homebrew/bin 等、win=WinGet Links/scoop/chocolatey/C:\ffmpeg\bin。Windows 的子程序都要帶 CREATE_NO_WINDOW（見 `tool_command()`），否則會閃終端機視窗
+- `find_tool()` — GUI app 拿不到可靠的 shell PATH（mac 完全不繼承；Windows 上 winget 改的 PATH 要重新登入才生效），所以依序檢查：使用者手動設定的資料夾（settings.json 的 `ffmpeg_dir`）→ 常見安裝位置（mac=/opt/homebrew/bin 等、win=WinGet Links/scoop/chocolatey/C:\ffmpeg\bin）。Windows 的子程序都要帶 CREATE_NO_WINDOW（見 `make_command()`），否則會閃終端機視窗
+- `tool_status` / `set_ffmpeg_dir` — 設定視窗用：偵測狀態（用 `-version` 實測）與手動指定 ffmpeg 資料夾（存到 OS config dir 的 simplecut/settings.json；選到解壓根目錄會自動找 bin/）
 
 **前端**（`src/`）：
 - `store.ts` — zustand 單一 store；`computeSegments()` 把 clips 陣列換算成時間軸位置（clip 順序＝陣列順序，無 gap）

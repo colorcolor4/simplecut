@@ -4,6 +4,7 @@ import ExportDialog from "./components/ExportDialog";
 import Inspector from "./components/Inspector";
 import MediaBin from "./components/MediaBin";
 import Preview from "./components/Preview";
+import SettingsDialog from "./components/SettingsDialog";
 import Timeline from "./components/Timeline";
 import { openProject, saveProject } from "./project";
 import { useStore } from "./store";
@@ -12,6 +13,7 @@ const baseName = (p: string) => p.split("/").pop()?.split("\\").pop() ?? p;
 
 function App() {
   const [showExport, setShowExport] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
   const projectPath = useStore((s) => s.projectPath);
 
   useEffect(() => {
@@ -62,6 +64,9 @@ function App() {
           <button className="primary" onClick={() => setShowExport(true)}>
             匯出影片
           </button>
+          <button onClick={() => setShowSettings(true)} title="設定">
+            ⚙
+          </button>
         </div>
       </header>
       <div className="main">
@@ -71,6 +76,7 @@ function App() {
       </div>
       <Timeline />
       {showExport && <ExportDialog onClose={() => setShowExport(false)} />}
+      {showSettings && <SettingsDialog onClose={() => setShowSettings(false)} />}
     </div>
   );
 }
