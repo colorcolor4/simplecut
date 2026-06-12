@@ -8,7 +8,51 @@ on:
       - "v*"
 
 jobs:
+  # 先建好草稿 Release 再讓三個平台往裡面傳檔案。
+  # 不能讓 tauri-action 各自建：三個 job 同時查不到既有草稿，
+  # 會各開一個重複的 Release（v0.1.2 實際發生過）。
+  create-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+    steps:
+      - uses: actions/github-script@v7
+        id: create
+        with:
+          script: |
+            const body = [
+              '## 下載',
+              '',
+              '| 平台 | 檔案 |',
+              '|---|---|',
+              '| macOS（M 系列晶片） | `*_aarch64.dmg` |',
+              '| macOS（Intel） | `*_x64.dmg` |',
+              '| Windows | `*-setup.exe` 或 `*.msi` |',
+              '',
+              '## 使用前提：先安裝 ffmpeg',
+              '',
+              '- macOS：`brew install ffmpeg`',
+              '- Windows：`winget install ffmpeg`（裝完請重開 App）',
+              '',
+              'ffmpeg 裝在自訂位置時，可在 App 右上角「設定」手動指定資料夾。',
+              '',
+              'macOS 第一次開啟請對 App 按右鍵→打開；Windows SmartScreen 跳出時點「其他資訊→仍要執行」。',
+            ].join('\n');
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: process.env.GITHUB_REF_NAME,
+              name: `SimpleCut ${process.env.GITHUB_REF_NAME}`,
+              body,
+              draft: true,
+              prerelease: false,
+            });
+            return data.id;
+
   build:
+    needs: create-release
     permissions:
       contents: write
     strategy:
@@ -44,23 +88,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "SimpleCut ${{ github.ref_name }}"
-          releaseBody: |
-            ## 下載
-
-            | 平台 | 檔案 |
-            |---|---|
-            | macOS（M 系列晶片） | `*_aarch64.dmg` |
-            | macOS（Intel） | `*_x64.dmg` |
-            | Windows | `*-setup.exe` 或 `*.msi` |
-
-            ## 使用前提：先安裝 ffmpeg
-
-            - macOS：`brew install ffmpeg`
-            - Windows：`winget install ffmpeg`
-
-            macOS 第一次開啟請對 App 按右鍵→打開；Windows SmartScreen 跳出時點「其他資訊→仍要執行」。
-          releaseDraft: true
-          prerelease: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
